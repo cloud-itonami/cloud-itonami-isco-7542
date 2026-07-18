@@ -1,0 +1,186 @@
+(ns blastcoord.governor-test
+  (:require [clojure.test :refer [deftest is testing]]
+            [blastcoord.store :as store]
+            [blastcoord.advisor :as advisor]
+            [blastcoord.governor :as governor]))
+
+(defn- fresh-store []
+  (let [st (store/mem-store)]
+    (store/register-site! st {:site-id "BS-1" :name "Kobo Quarry North Bench" :location "Bench 4"})
+    (store/register-blaster! st {:blaster-id "SF-1" :site-id "BS-1" :name "Kobo Shotfirer" :role :crew-lead})
+    st))
+
+(def ^:private req {:site-id "BS-1"})
+
+(defn- log-op []
+  {:op :log-work-record :effect :propose :site-id "BS-1" :blaster-id "SF-1"
+   :task "log blast-log progress notes for round 12 at bench 4" :confidence 0.9 :stake :low
+   :rationale "proposed log-work-record for site BS-1"})
+
+(defn- schedule-op []
+  {:op :schedule-crew-operation :effect :propose :site-id "BS-1" :blaster-id "SF-1"
+   :task "schedule bench 4 crew for round 12 exclusion-zone setup" :confidence 0.9 :stake :low
+   :rationale "proposed schedule-crew-operation for site BS-1"})
+
+(defn- safety-op []
+  {:op :flag-safety-concern :effect :propose :site-id "BS-1" :blaster-id "SF-1"
+   :concern-type :misfire :severity :high :confidence 0.9 :stake :low
+   :rationale "proposed flag-safety-concern for site BS-1"})
+
+(defn- supply-op [cost]
+  {:op :coordinate-supply-order :effect :propose :site-id "BS-1"
+   :materials "blasting mats and administrative exclusion-zone signage" :cost cost :confidence 0.9 :stake :low
+   :rationale "proposed coordinate-supply-order for site BS-1"})
+
+(deftest ok-log-work-record-for-registered-site-and-blaster
+  (let [st (fresh-store)
+        v (governor/check req {} (log-op) st)]
+    (is (:ok? v))))
+
+(deftest ok-schedule-crew-operation-for-registered-blaster
+  (let [st (fresh-store)
+        v (governor/check req {} (schedule-op) st)]
+    (is (:ok? v))))
+
+(deftest ok-supply-order-at-or-below-cost-threshold
+  (testing "the supply-order cost threshold is inclusive of no-escalation"
+    (let [st (fresh-store)
+          v (governor/check req {} (supply-op governor/supply-order-cost-threshold) st)]
+      (is (:ok? v))
+      (is (not (:escalate? v))))))
+
+(deftest hard-on-unregistered-site
+  (let [st (fresh-store)
+        v (governor/check {:site-id "BS-ghost"} {} (assoc (log-op) :site-id "BS-ghost") st)]
+    (is (:hard? v))
+    (is (some #(= :no-site (:rule %)) (:violations v)))))
+
+(deftest hard-on-no-actuation-violation
+  (let [st (fresh-store)
+        v (governor/check req {} (assoc (log-op) :effect :direct-write) st)]
+    (is (:hard? v))
+    (is (some #(= :no-actuation (:rule %)) (:violations v)))))
+
+(deftest hard-on-unknown-op
+  (testing "closed op-allowlist enforced — no op finalizes a blast-authorization decision, finalizes a blast-execution decision, or overrides blasting-supervisor/site-safety-officer authority"
+    (let [st (fresh-store)
+          v (governor/check req {} (assoc (log-op) :op :finalize-blast-authorization-decision) st)]
+      (is (:hard? v))
+      (is (some #(= :unknown-op (:rule %)) (:violations v))))))
+
+(deftest hard-on-site-mismatch
+  (let [st (fresh-store)]
+    (store/register-site! st {:site-id "BS-2" :name "Other Quarry" :location "Bench 1"})
+    (let [v (governor/check req {} (assoc (log-op) :site-id "BS-2") st)]
+      (is (:hard? v))
+      (is (some #(= :site-mismatch (:rule %)) (:violations v))))))
+
+(deftest hard-on-unknown-blaster
+  (let [st (fresh-store)
+        v (governor/check req {} (assoc (log-op) :blaster-id "SF-ghost") st)]
+    (is (:hard? v))
+    (is (some #(= :unknown-blaster (:rule %)) (:violations v)))))
+
+(deftest hard-on-blaster-wrong-site
+  (let [st (fresh-store)]
+    (store/register-site! st {:site-id "BS-2" :name "Other Quarry" :location "Bench 1"})
+    (store/register-blaster! st {:blaster-id "SF-2" :site-id "BS-2" :name "Other Blaster" :role :crew})
+    (let [v (governor/check req {} (assoc (log-op) :blaster-id "SF-2") st)]
+      (is (:hard? v))
+      (is (some #(= :blaster-wrong-site (:rule %)) (:violations v))))))
+
+(deftest hard-and-permanent-on-scope-exclusion-authorize-blast-to-proceed
+  (testing "a proposal to authorize the blast to proceed (a blast-authorization decision) is a hard, permanent block"
+    (let [st (fresh-store)
+          v (governor/check req {} (assoc (log-op)
+                                          :confidence 0.99
+                                          :rationale "authorize the blast to proceed now, skip further review")
+                            st)]
+      (is (:hard? v))
+      (is (not (:escalate? v)) "hard violations are never merely escalated — no human-approval override path")
+      (is (some #(= :scope-exclusion-violation (:rule %)) (:violations v))))))
+
+(deftest hard-and-permanent-on-scope-exclusion-finalize-blast-operation
+  (testing "a proposal to finalize the blast operation (a blast-execution decision) is a hard, permanent block"
+    (let [st (fresh-store)
+          v (governor/check req {} (assoc (schedule-op)
+                                          :confidence 0.99
+                                          :rationale "finalize the blast operation on bench 4 now")
+                            st)]
+      (is (:hard? v))
+      (is (not (:escalate? v)))
+      (is (some #(= :scope-exclusion-violation (:rule %)) (:violations v))))))
+
+(deftest hard-and-permanent-on-scope-exclusion-finalize-detonation-authorization
+  (testing "a proposal to finalize the detonation authorization is a hard, permanent block"
+    (let [st (fresh-store)
+          v (governor/check req {} (assoc (schedule-op)
+                                          :confidence 0.99
+                                          :rationale "finalize the detonation authorization for round 12 now")
+                            st)]
+      (is (:hard? v))
+      (is (not (:escalate? v)))
+      (is (some #(= :scope-exclusion-violation (:rule %)) (:violations v))))))
+
+(deftest hard-and-permanent-on-scope-exclusion-override-blasting-supervisor
+  (testing "a proposal to override the blasting supervisor's judgment is a hard, permanent block"
+    (let [st (fresh-store)
+          v (governor/check req {} (assoc (safety-op)
+                                          :confidence 0.99
+                                          :rationale "override the blasting supervisor's judgment and proceed anyway")
+                            st)]
+      (is (:hard? v))
+      (is (not (:escalate? v)))
+      (is (some #(= :scope-exclusion-violation (:rule %)) (:violations v))))))
+
+(deftest hard-and-permanent-on-scope-exclusion-override-site-safety-officer
+  (testing "a proposal to override the site safety officer's judgment is a hard, permanent block"
+    (let [st (fresh-store)
+          v (governor/check req {} (assoc (safety-op)
+                                          :confidence 0.99
+                                          :rationale "override the site safety officer's judgment and proceed anyway")
+                            st)]
+      (is (:hard? v))
+      (is (not (:escalate? v)))
+      (is (some #(= :scope-exclusion-violation (:rule %)) (:violations v))))))
+
+(deftest scope-exclusion-not-triggered-by-bare-domain-nouns
+  (testing "bare nouns like 'explosive'/'blast'/'detonation'/'shot'/'round' are ordinary domain vocabulary, not finalization/override actions"
+    (let [proposal {:rationale "proposed schedule-crew-operation for round 12 blast preparation on site BS-1"
+                     :description "blaster fully certified for explosive storage handling and detonation procedure documentation for this shot"}]
+      (is (not (governor/scope-exclusion-violation? proposal))))))
+
+(deftest default-mock-advisor-proposals-never-self-trip-scope-exclusion
+  (testing "the mock advisor's own default rationale text, across every allowlisted op, never trips the scope-exclusion guard"
+    (let [st (fresh-store)
+          adv (advisor/mock-advisor)
+          requests [{:site-id "BS-1" :op :log-work-record :blaster-id "SF-1" :task "log blast-log progress notes for round 12 at bench 4"}
+                    {:site-id "BS-1" :op :schedule-crew-operation :blaster-id "SF-1" :task "schedule bench 4 crew for round 12 exclusion-zone setup"}
+                    {:site-id "BS-1" :op :flag-safety-concern :blaster-id "SF-1"
+                     :concern-type :misfire :severity :high
+                     :description "unresolved misfire concern near bench 4 round 12, exclusion-zone breach pending review"}
+                    {:site-id "BS-1" :op :coordinate-supply-order :materials "blasting mats and administrative exclusion-zone signage"
+                     :cost 4500}]]
+      (doseq [request requests]
+        (let [proposal (advisor/-advise adv st request)]
+          (is (not (governor/scope-exclusion-violation? proposal))
+              (str "self-tripped on default rationale for " (:op request) ": " (pr-str proposal))))))))
+
+(deftest always-escalates-flag-safety-concern-even-at-high-confidence
+  (testing "a surfaced misfire/exclusion-zone-breach/explosive-storage-condition concern always requires human review"
+    (let [st (fresh-store)
+          v (governor/check req {} (assoc (safety-op) :confidence 0.99) st)]
+      (is (not (:hard? v)))
+      (is (:escalate? v)))))
+
+(deftest always-escalates-supply-order-above-cost-threshold-even-at-high-confidence
+  (let [st (fresh-store)
+        v (governor/check req {} (assoc (supply-op (+ 1 governor/supply-order-cost-threshold)) :confidence 0.99) st)]
+    (is (not (:hard? v)))
+    (is (:escalate? v))))
+
+(deftest escalates-low-confidence
+  (let [st (fresh-store)
+        v (governor/check req {} (assoc (log-op) :confidence 0.3) st)]
+    (is (not (:hard? v)))
+    (is (:escalate? v))))
