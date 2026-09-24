@@ -19,7 +19,7 @@
                :flag-safety-concern|:coordinate-supply-order
                :effect :propose :site-id str :blaster-id str? :cost
                number? :stake kw :confidence n :rationale str}"
-  (:require [clojure.edn :as edn]))
+  (:require [kotoba.lang.edn :as edn]))
 
 (defprotocol Advisor
   (-advise [advisor store request] "request -> proposal map"))
