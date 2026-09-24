@@ -1,0 +1,36 @@
+;; What this vertical's robot physically does, declared for
+;; kotoba.robotics.process (kotoba-lang/robotics). `kbb -M:physics` runs it.
+;;
+;; README "Robotics premise": a blast-operation scheduling/logistics
+;; coordination robot logs blasts and progress, proposes crew/site schedules,
+;; surfaces safety concerns and coordinates blasting-equipment supply; it never
+;; handles explosives and never authorizes a blast. Its physical work is
+;; site logistics of non-explosive equipment up a haul ramp, and watching the
+;; day-storage box that the schedule depends on (its wall heats in the sun).
+;;
+;; Every number without a cited source is marked `estimate` in its :basis.
+;; Replacing an estimate with a sourced value is this bot's growth work.
+{:physics/schema "itonami.physical-ai.spec.v1"
+ :repo "cloud-itonami/cloud-itonami-isco-7542"
+ :cases
+ [{:id :equipment-up-haul-ramp
+   :kind :transport
+   :procedure "tracked carrier takes blasting equipment (drill steel, stemming, cable reels) up the haul ramp to the bench"
+   :params {:mass-kg 300.0 :payload-kg 200.0 :distance-m 150.0 :v-max-mps 1.2 :a-max-mps2 0.3
+            :brake-decel-mps2 1.0 :drive-force-n 1200.0 :crr 0.06
+            :cog-height-m 0.50 :support-half-length-m 0.60
+            :max-time-s 1800.0}
+   :sweep {:param :slope-deg :values [0.0 3.0 6.0 8.0 10.0]}
+   :quantity :cycle-time-s
+   :limit {:max 180.0 :basis "estimate: one ramp trip within a 3-minute slot of the pre-blast site schedule"}
+   :boundary {:lo 0.0 :hi 12.0}}
+  {:id :day-box-wall-in-sun
+   :kind :thermal
+   :procedure "sun-heated steel skin of the site day-storage box heats its plywood lining; the inner face is watched over a working day"
+   :params {:conductivity-w-mk 0.13 :density-kg-m3 550.0 :specific-heat-j-kgk 1600.0
+            :t0-c 25.0 :t-hot-c 65.0 :h-front-w-m2k 25.0 :t-back-ambient-c 30.0 :h-back-w-m2k 5.0
+            :threshold-c 40.0 :duration-s 28800.0 :nodes 21}
+   :sweep {:param :thickness-m :values [0.006 0.012 0.019 0.025 0.038]}
+   :quantity :peak-back-c
+   :limit {:max 40.0 :basis "estimate: keep the inner face of the storage box under 40 °C; replace with the manufacturer's storage-temperature limit"}
+   :boundary {:lo 0.004 :hi 0.06}}]}
