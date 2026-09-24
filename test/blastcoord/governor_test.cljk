@@ -1,5 +1,5 @@
 (ns blastcoord.governor-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [blastcoord.store :as store]
             [blastcoord.advisor :as advisor]
             [blastcoord.governor :as governor]))
