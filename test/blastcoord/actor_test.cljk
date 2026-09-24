@@ -1,5 +1,5 @@
 (ns blastcoord.actor-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [blastcoord.actor :as actor]
             [blastcoord.store :as store]))
 
