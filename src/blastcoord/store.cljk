@@ -1,7 +1,7 @@
 (ns blastcoord.store
   "SSoT for the ISCO-08 7542 shotfirers and blasters blast-operation
   scheduling/logistics coordination actor (itonami actor pattern,
-  ADR-2607121000 / CLAUDE.md Actors section; README's 'Robotics
+  ADR-2607121000 / AGENTS.md Actors section; README's 'Robotics
   premise' — a blast-operation scheduling/logistics coordination robot
   proposes crew/site scheduling, blast-log/progress record logging,
   safety-concern flags and blasting-equipment/administrative-supply
